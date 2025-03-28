@@ -1,0 +1,74 @@
+-- Aimbot toàn bộ người chơi (không phân biệt team)
+
+local fov = 100
+local maxTransparency = 0.1
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local Cam = workspace.CurrentCamera
+local localPlayer = Players.LocalPlayer
+
+-- Vẽ vòng FOV
+local FOVring = Drawing.new("Circle")
+FOVring.Visible = true
+FOVring.Filled = false
+FOVring.Thickness = 2
+FOVring.Color = Color3.fromRGB(255, 0, 0) -- đỏ
+FOVring.Radius = fov
+FOVring.Transparency = 0.1
+FOVring.Position = Cam.ViewportSize / 2
+
+-- Cập nhật vị trí vòng
+local function updateFOV()
+    FOVring.Position = Cam.ViewportSize / 2
+end
+
+-- Tính độ mờ theo khoảng cách đến tâm
+local function calculateTransparency(distance)
+    local transparency = (1 - (distance / fov)) * maxTransparency
+    return math.clamp(transparency, 0, 1)
+end
+
+-- Tìm player gần nhất (kể cả cùng team)
+local function getClosestPlayer()
+    local closestPlayer, closestDistance = nil, math.huge
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local pos, visible = Cam:WorldToViewportPoint(player.Character.Head.Position)
+            if visible then
+                local dist = (Vector2.new(pos.X, pos.Y) - Cam.ViewportSize / 2).Magnitude
+                if dist < fov and dist < closestDistance then
+                    closestDistance = dist
+                    closestPlayer = player
+                end
+            end
+        end
+    end
+    return closestPlayer, closestDistance
+end
+
+-- Hàm xoay camera
+local function aimAt(targetPosition)
+    local direction = (targetPosition - Cam.CFrame.Position).unit
+    Cam.CFrame = CFrame.new(Cam.CFrame.Position, Cam.CFrame.Position + direction)
+end
+
+-- Gỡ aimbot khi nhấn Delete
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.Delete then
+        RunService:UnbindFromRenderStep("AimbotAll")
+        FOVring:Remove()
+    end
+end)
+
+-- Kết nối vòng lặp
+RunService:BindToRenderStep("AimbotAll", Enum.RenderPriority.Camera.Value + 1, function()
+    updateFOV()
+    local target, distance = getClosestPlayer()
+    if target and target.Character:FindFirstChild("Head") then
+        aimAt(target.Character.Head.Position)
+        FOVring.Transparency = calculateTransparency(distance)
+    else
+        FOVring.Transparency = 0.1
+    end
+end)
