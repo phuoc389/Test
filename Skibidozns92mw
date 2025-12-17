@@ -1,0 +1,1001 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Cam = workspace.CurrentCamera
+
+local localPlayer = Players.LocalPlayer
+
+-- Default settings
+local FOV_RADIUS = 120
+local AIM_MAX_DISTANCE = 300
+local AIM_ENEMY_ONLY = true
+local AIM_LOCKED = false
+local AIM_ENABLED = false
+local WALL_CHECK = true
+local AIM_PART = "Head"
+local AIM_NPC = false
+local LOCKED_TARGET = nil
+local GUI_VISIBLE = true 
+
+-- Human-like settings
+local HUMAN_SMOOTHNESS = 0.5
+local HUMAN_REACTION_TIME = 0.1
+local AIM_SHAKE = 0.5
+local AIM_OVERSHOOT = 0.3
+local AIM_CORRECTION = 0.2
+
+local currentTarget = nil
+local lastTargetChange = 0
+local isAiming = false
+local aimStartTime = 0
+local lastAimPos = nil
+
+-- Config file path
+local CONFIG_FILE_NAME = "phuoc_aimbot_config.json"
+
+-- FOV ring
+local FOVring = Drawing.new("Circle")
+FOVring.Visible = false
+FOVring.Thickness = 2
+FOVring.Color = Color3.fromRGB(255, 0, 0)
+FOVring.Filled = false
+FOVring.Radius = FOV_RADIUS
+FOVring.Position = Cam.ViewportSize / 2
+FOVring.Transparency = 0.3
+
+local function updateFOV()
+    FOVring.Radius = FOV_RADIUS
+    FOVring.Position = Cam.ViewportSize / 2
+end
+
+-- Save config to file
+local function saveConfig()
+    local config = {
+        FOV_RADIUS = FOV_RADIUS,
+        AIM_MAX_DISTANCE = AIM_MAX_DISTANCE,
+        AIM_ENEMY_ONLY = AIM_ENEMY_ONLY,
+        AIM_LOCKED = AIM_LOCKED,
+        WALL_CHECK = WALL_CHECK,
+        AIM_PART = AIM_PART,
+        AIM_NPC = AIM_NPC,
+        HUMAN_SMOOTHNESS = HUMAN_SMOOTHNESS,
+        AIM_SHAKE = AIM_SHAKE,
+        AIM_OVERSHOOT = AIM_OVERSHOOT,
+        GUI_VISIBLE = GUI_VISIBLE
+    }
+    
+    local success, json = pcall(function()
+        return HttpService:JSONEncode(config)
+    end)
+    
+    if success then
+        writefile(CONFIG_FILE_NAME, json)
+        print("✅ Aimbot config saved!")
+    else
+        warn("❌ Failed to save config: " .. tostring(json))
+    end
+end
+
+-- Load config from file
+local function loadConfig()
+    if not isfile(CONFIG_FILE_NAME) then
+        print("📁 No config file found, using defaults")
+        return
+    end
+    
+    local success, content = pcall(function()
+        return readfile(CONFIG_FILE_NAME)
+    end)
+    
+    if not success then
+        warn("❌ Failed to read config file")
+        return
+    end
+    
+    local success2, config = pcall(function()
+        return HttpService:JSONDecode(content)
+    end)
+    
+    if success2 and config then
+        FOV_RADIUS = config.FOV_RADIUS or FOV_RADIUS
+        AIM_MAX_DISTANCE = config.AIM_MAX_DISTANCE or AIM_MAX_DISTANCE
+        AIM_ENEMY_ONLY = config.AIM_ENEMY_ONLY or AIM_ENEMY_ONLY
+        AIM_LOCKED = config.AIM_LOCKED or AIM_LOCKED
+        WALL_CHECK = config.WALL_CHECK or WALL_CHECK
+        AIM_PART = config.AIM_PART or AIM_PART
+        AIM_NPC = config.AIM_NPC or AIM_NPC
+        HUMAN_SMOOTHNESS = config.HUMAN_SMOOTHNESS or HUMAN_SMOOTHNESS
+        AIM_SHAKE = config.AIM_SHAKE or AIM_SHAKE
+        AIM_OVERSHOOT = config.AIM_OVERSHOOT or AIM_OVERSHOOT
+        GUI_VISIBLE = config.GUI_VISIBLE ~= nil and config.GUI_VISIBLE or GUI_VISIBLE
+        
+        print("✅ Aimbot config loaded!")
+    else
+        warn("❌ Failed to parse config file")
+    end
+end
+
+-- Auto-save when game closes or script stops
+game:GetService("CoreGui").ChildRemoved:Connect(function(child)
+    if child == ScreenGui then
+        saveConfig()
+    end
+end)
+
+-- GUI Creation
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AimbotGUI by phuoc"
+ScreenGui.ResetOnSpawn = false 
+ScreenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+local ToggleGuiBtn = Instance.new("TextButton")
+ToggleGuiBtn.Size = UDim2.new(0, 40, 0, 40)
+ToggleGuiBtn.Position = UDim2.new(0, 10, 1, -50)
+ToggleGuiBtn.AnchorPoint = Vector2.new(0, 1)
+ToggleGuiBtn.Text = "≡"
+ToggleGuiBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleGuiBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+ToggleGuiBtn.BackgroundTransparency = 0.1
+ToggleGuiBtn.Parent = ScreenGui
+
+local UICornerBtn = Instance.new("UICorner", ToggleGuiBtn)
+UICornerBtn.CornerRadius = UDim.new(0, 8)
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 200, 0, 450)
+MainFrame.Position = UDim2.new(0, 20, 0.5, -225)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.BackgroundTransparency = 0.1
+MainFrame.Visible = GUI_VISIBLE
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner", MainFrame)
+UICorner.CornerRadius = UDim.new(0, 12)
+
+local DragFrame = Instance.new("Frame")
+DragFrame.Size = UDim2.new(1, 0, 0, 30)
+DragFrame.BackgroundTransparency = 1
+DragFrame.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 1, 0)
+Title.Text = "🎯 Aimbot Menu by phuoc"
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Color3.fromRGB(0, 255, 0)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.Parent = DragFrame
+
+-- Drag functionality
+local dragging
+local dragInput
+local dragStart
+local startPos
+
+local function update(input)
+    local delta = input.Position - dragStart
+    MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+DragFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+DragFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        update(input)
+    end
+end)
+
+-- Toggle Aimbot
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleBtn.Position = UDim2.new(0, 10, 0, 40)
+ToggleBtn.Text = "Aimbot: OFF"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+ToggleBtn.Parent = MainFrame
+Instance.new("UICorner", ToggleBtn)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    AIM_ENABLED = not AIM_ENABLED
+    ToggleBtn.Text = "Aimbot: " .. (AIM_ENABLED and "ON" or "OFF")
+    FOVring.Visible = AIM_ENABLED
+    if not AIM_ENABLED then
+        LOCKED_TARGET = nil
+        currentTarget = nil
+        isAiming = false
+    end
+    saveConfig()
+end)
+
+-- Toggle Enemy / All / NPC
+local ModeBtn = Instance.new("TextButton")
+ModeBtn.Size = UDim2.new(1, -20, 0, 30)
+ModeBtn.Position = UDim2.new(0, 10, 0, 80)
+ModeBtn.Text = "Mode: Enemy"
+ModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ModeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+ModeBtn.Parent = MainFrame
+Instance.new("UICorner", ModeBtn)
+
+local MODE_STATES = {"Enemy", "All", "NPC", "All + NPC"}
+local CURRENT_MODE = 1
+
+ModeBtn.MouseButton1Click:Connect(function()
+    CURRENT_MODE = CURRENT_MODE + 1
+    if CURRENT_MODE > #MODE_STATES then
+        CURRENT_MODE = 1
+    end
+    
+    local newMode = MODE_STATES[CURRENT_MODE]
+    ModeBtn.Text = "Mode: " .. newMode
+    
+    if newMode == "Enemy" then
+        AIM_ENEMY_ONLY = true
+        AIM_NPC = false
+    elseif newMode == "All" then
+        AIM_ENEMY_ONLY = false
+        AIM_NPC = false
+    elseif newMode == "NPC" then
+        AIM_ENEMY_ONLY = true
+        AIM_NPC = true
+    elseif newMode == "All + NPC" then
+        AIM_ENEMY_ONLY = false
+        AIM_NPC = true
+    end
+    
+    saveConfig()
+end)
+
+-- Lock Button
+local LockBtn = Instance.new("TextButton")
+LockBtn.Size = UDim2.new(1, -20, 0, 30)
+LockBtn.Position = UDim2.new(0, 10, 0, 120)
+LockBtn.Text = "Lock: OFF"
+LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+LockBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+LockBtn.Parent = MainFrame
+Instance.new("UICorner", LockBtn)
+
+LockBtn.MouseButton1Click:Connect(function()
+    AIM_LOCKED = not AIM_LOCKED
+    if not AIM_LOCKED then 
+        LOCKED_TARGET = nil 
+        currentTarget = nil
+    end
+    LockBtn.Text = "Lock: " .. (AIM_LOCKED and "ON" or "OFF")
+    saveConfig()
+end)
+
+-- Wall Check Button
+local WallCheckBtn = Instance.new("TextButton")
+WallCheckBtn.Size = UDim2.new(1, -20, 0, 30)
+WallCheckBtn.Position = UDim2.new(0, 10, 0, 160)
+WallCheckBtn.Text = "Wall Check: ON"
+WallCheckBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+WallCheckBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+WallCheckBtn.Parent = MainFrame
+Instance.new("UICorner", WallCheckBtn)
+
+WallCheckBtn.MouseButton1Click:Connect(function()
+    WALL_CHECK = not WALL_CHECK
+    WallCheckBtn.Text = "Wall Check: " .. (WALL_CHECK and "ON" or "OFF")
+    saveConfig()
+end)
+
+-- Aim Part Button
+local AimPartBtn = Instance.new("TextButton")
+AimPartBtn.Size = UDim2.new(1, -20, 0, 30)
+AimPartBtn.Position = UDim2.new(0, 10, 0, 200)
+AimPartBtn.Text = "Aim: Head"
+AimPartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AimPartBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+AimPartBtn.Parent = MainFrame
+Instance.new("UICorner", AimPartBtn)
+
+AimPartBtn.MouseButton1Click:Connect(function()
+    if AIM_PART == "Head" then
+        AIM_PART = "HumanoidRootPart"
+        AimPartBtn.Text = "Aim: Body"
+    else
+        AIM_PART = "Head"
+        AimPartBtn.Text = "Aim: Head"
+    end
+    saveConfig()
+end)
+
+-- Human-like Settings
+local HumanSettingsFrame = Instance.new("Frame")
+HumanSettingsFrame.Size = UDim2.new(1, -20, 0, 140)
+HumanSettingsFrame.Position = UDim2.new(0, 10, 0, 240)
+HumanSettingsFrame.BackgroundTransparency = 1
+HumanSettingsFrame.Parent = MainFrame
+
+local HumanLabel = Instance.new("TextLabel")
+HumanLabel.Size = UDim2.new(1, 0, 0, 20)
+HumanLabel.Text = "Human-like Settings:"
+HumanLabel.BackgroundTransparency = 1
+HumanLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+HumanLabel.Font = Enum.Font.GothamBold
+HumanLabel.TextSize = 14
+HumanLabel.Parent = HumanSettingsFrame
+
+-- Smoothness TextBox
+local SmoothnessFrame = Instance.new("Frame")
+SmoothnessFrame.Size = UDim2.new(1, 0, 0, 30)
+SmoothnessFrame.Position = UDim2.new(0, 0, 0, 25)
+SmoothnessFrame.BackgroundTransparency = 1
+SmoothnessFrame.Parent = HumanSettingsFrame
+
+local SmoothnessLabel = Instance.new("TextLabel")
+SmoothnessLabel.Size = UDim2.new(0.6, 0, 1, 0)
+SmoothnessLabel.Text = "Speed:"
+SmoothnessLabel.BackgroundTransparency = 1
+SmoothnessLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+SmoothnessLabel.Font = Enum.Font.Gotham
+SmoothnessLabel.TextSize = 12
+SmoothnessLabel.TextXAlignment = Enum.TextXAlignment.Left
+SmoothnessLabel.Parent = SmoothnessFrame
+
+local SmoothnessBox = Instance.new("TextBox")
+SmoothnessBox.Size = UDim2.new(0.4, 0, 0.6, 0)
+SmoothnessBox.Position = UDim2.new(0.6, 0, 0.2, 0)
+SmoothnessBox.Text = tostring(HUMAN_SMOOTHNESS)
+SmoothnessBox.PlaceholderText = "0.5"
+SmoothnessBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+SmoothnessBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+SmoothnessBox.Parent = SmoothnessFrame
+Instance.new("UICorner", SmoothnessBox)
+
+-- Shake TextBox
+local ShakeFrame = Instance.new("Frame")
+ShakeFrame.Size = UDim2.new(1, 0, 0, 30)
+ShakeFrame.Position = UDim2.new(0, 0, 0, 55)
+ShakeFrame.BackgroundTransparency = 1
+ShakeFrame.Parent = HumanSettingsFrame
+
+local ShakeLabel = Instance.new("TextLabel")
+ShakeLabel.Size = UDim2.new(0.6, 0, 1, 0)
+ShakeLabel.Text = "Shake:"
+ShakeLabel.BackgroundTransparency = 1
+ShakeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+ShakeLabel.Font = Enum.Font.Gotham
+ShakeLabel.TextSize = 12
+ShakeLabel.TextXAlignment = Enum.TextXAlignment.Left
+ShakeLabel.Parent = ShakeFrame
+
+local ShakeBox = Instance.new("TextBox")
+ShakeBox.Size = UDim2.new(0.4, 0, 0.6, 0)
+ShakeBox.Position = UDim2.new(0.6, 0, 0.2, 0)
+ShakeBox.Text = tostring(AIM_SHAKE)
+ShakeBox.PlaceholderText = "0.5"
+ShakeBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+ShakeBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ShakeBox.Parent = ShakeFrame
+Instance.new("UICorner", ShakeBox)
+
+-- Overshoot TextBox
+local OvershootFrame = Instance.new("Frame")
+OvershootFrame.Size = UDim2.new(1, 0, 0, 30)
+OvershootFrame.Position = UDim2.new(0, 0, 0, 85)
+OvershootFrame.BackgroundTransparency = 1
+OvershootFrame.Parent = HumanSettingsFrame
+
+local OvershootLabel = Instance.new("TextLabel")
+OvershootLabel.Size = UDim2.new(0.6, 0, 1, 0)
+OvershootLabel.Text = "Overshoot:"
+OvershootLabel.BackgroundTransparency = 1
+OvershootLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+OvershootLabel.Font = Enum.Font.Gotham
+OvershootLabel.TextSize = 12
+OvershootLabel.TextXAlignment = Enum.TextXAlignment.Left
+OvershootLabel.Parent = OvershootFrame
+
+local OvershootBox = Instance.new("TextBox")
+OvershootBox.Size = UDim2.new(0.4, 0, 0.6, 0)
+OvershootBox.Position = UDim2.new(0.6, 0, 0.2, 0)
+OvershootBox.Text = tostring(AIM_OVERSHOOT)
+OvershootBox.PlaceholderText = "0.3"
+OvershootBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+OvershootBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+OvershootBox.Parent = OvershootFrame
+Instance.new("UICorner", OvershootBox)
+
+-- TextBox functions
+local function updateSmoothness(value)
+    local num = tonumber(value)
+    if num and num >= 0.05 and num <= 1 then
+        HUMAN_SMOOTHNESS = num
+        SmoothnessBox.Text = tostring(HUMAN_SMOOTHNESS)
+        saveConfig()
+    else
+        SmoothnessBox.Text = tostring(HUMAN_SMOOTHNESS)
+    end
+end
+
+local function updateShake(value)
+    local num = tonumber(value)
+    if num and num >= 0 and num <= 2 then
+        AIM_SHAKE = num
+        ShakeBox.Text = tostring(AIM_SHAKE)
+        saveConfig()
+    else
+        ShakeBox.Text = tostring(AIM_SHAKE)
+    end
+end
+
+local function updateOvershoot(value)
+    local num = tonumber(value)
+    if num and num >= 0 and num <= 1 then
+        AIM_OVERSHOOT = num
+        OvershootBox.Text = tostring(AIM_OVERSHOOT)
+        saveConfig()
+    else
+        OvershootBox.Text = tostring(AIM_OVERSHOOT)
+    end
+end
+
+-- Connect text boxes
+SmoothnessBox.FocusLost:Connect(function()
+    updateSmoothness(SmoothnessBox.Text)
+end)
+
+ShakeBox.FocusLost:Connect(function()
+    updateShake(ShakeBox.Text)
+end)
+
+OvershootBox.FocusLost:Connect(function()
+    updateOvershoot(OvershootBox.Text)
+end)
+
+-- FOV Size TextBox
+local FOVBox = Instance.new("TextBox")
+FOVBox.Size = UDim2.new(1, -20, 0, 30)
+FOVBox.Position = UDim2.new(0, 10, 0, 390)
+FOVBox.PlaceholderText = "FOV Radius: "..FOV_RADIUS
+FOVBox.Text = tostring(FOV_RADIUS)
+FOVBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+FOVBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+FOVBox.ClearTextOnFocus = false
+FOVBox.Parent = MainFrame
+Instance.new("UICorner", FOVBox)
+
+FOVBox.FocusLost:Connect(function()
+    local val = tonumber(FOVBox.Text)
+    if val and val > 0 then
+        FOV_RADIUS = val
+        updateFOV()
+        FOVBox.Text = tostring(FOV_RADIUS)
+        FOVBox.PlaceholderText = "FOV Radius: "..FOV_RADIUS
+        saveConfig()
+    else
+        FOVBox.Text = tostring(FOV_RADIUS)
+    end
+end)
+
+-- Distance TextBox
+local DistanceBox = Instance.new("TextBox")
+DistanceBox.Size = UDim2.new(1, -20, 0, 30)
+DistanceBox.Position = UDim2.new(0, 10, 0, 430)
+DistanceBox.PlaceholderText = "Max Distance: "..AIM_MAX_DISTANCE
+DistanceBox.Text = tostring(AIM_MAX_DISTANCE)
+DistanceBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+DistanceBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+DistanceBox.ClearTextOnFocus = false
+DistanceBox.Parent = MainFrame
+Instance.new("UICorner", DistanceBox)
+
+DistanceBox.FocusLost:Connect(function()
+    local val = tonumber(DistanceBox.Text)
+    if val and val > 0 then
+        AIM_MAX_DISTANCE = val
+        DistanceBox.Text = tostring(AIM_MAX_DISTANCE)
+        DistanceBox.PlaceholderText = "Max Distance: "..AIM_MAX_DISTANCE
+        saveConfig()
+    else
+        DistanceBox.Text = tostring(AIM_MAX_DISTANCE)
+    end
+end)
+
+-- Save/Load Buttons
+local SaveLoadFrame = Instance.new("Frame")
+SaveLoadFrame.Size = UDim2.new(1, -20, 0, 30)
+SaveLoadFrame.Position = UDim2.new(0, 10, 0, 470)
+SaveLoadFrame.BackgroundTransparency = 1
+SaveLoadFrame.Parent = MainFrame
+
+local SaveBtn = Instance.new("TextButton")
+SaveBtn.Size = UDim2.new(0.48, 0, 1, 0)
+SaveBtn.Position = UDim2.new(0, 0, 0, 0)
+SaveBtn.Text = "💾 Save"
+SaveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+SaveBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+SaveBtn.Parent = SaveLoadFrame
+Instance.new("UICorner", SaveBtn)
+
+local LoadBtn = Instance.new("TextButton")
+LoadBtn.Size = UDim2.new(0.48, 0, 1, 0)
+LoadBtn.Position = UDim2.new(0.52, 0, 0, 0)
+LoadBtn.Text = "📂 Load"
+LoadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+LoadBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 200)
+LoadBtn.Parent = SaveLoadFrame
+Instance.new("UICorner", LoadBtn)
+
+SaveBtn.MouseButton1Click:Connect(function()
+    saveConfig()
+end)
+
+LoadBtn.MouseButton1Click:Connect(function()
+    loadConfig()
+    -- Update UI after loading
+    FOVBox.Text = tostring(FOV_RADIUS)
+    DistanceBox.Text = tostring(AIM_MAX_DISTANCE)
+    SmoothnessBox.Text = tostring(HUMAN_SMOOTHNESS)
+    ShakeBox.Text = tostring(AIM_SHAKE)
+    OvershootBox.Text = tostring(AIM_OVERSHOOT)
+    
+    -- Update mode button
+    if AIM_ENEMY_ONLY and not AIM_NPC then
+        CURRENT_MODE = 1
+        ModeBtn.Text = "Mode: Enemy"
+    elseif not AIM_ENEMY_ONLY and not AIM_NPC then
+        CURRENT_MODE = 2
+        ModeBtn.Text = "Mode: All"
+    elseif AIM_ENEMY_ONLY and AIM_NPC then
+        CURRENT_MODE = 3
+        ModeBtn.Text = "Mode: NPC"
+    elseif not AIM_ENEMY_ONLY and AIM_NPC then
+        CURRENT_MODE = 4
+        ModeBtn.Text = "Mode: All + NPC"
+    end
+    
+    WallCheckBtn.Text = "Wall Check: " .. (WALL_CHECK and "ON" or "OFF")
+    LockBtn.Text = "Lock: " .. (AIM_LOCKED and "ON" or "OFF")
+    AimPartBtn.Text = "Aim: " .. (AIM_PART == "Head" and "Head" or "Body")
+end)
+
+-- Target GUI
+local ToggleTargetGuiBtn = Instance.new("TextButton")
+ToggleTargetGuiBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleTargetGuiBtn.Position = UDim2.new(0, 10, 0, 510)
+ToggleTargetGuiBtn.Text = "Target GUI: ON"
+ToggleTargetGuiBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleTargetGuiBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+ToggleTargetGuiBtn.Parent = MainFrame
+Instance.new("UICorner", ToggleTargetGuiBtn)
+
+local TargetFrame = Instance.new("Frame")
+TargetFrame.Size = UDim2.new(0, 250, 0, 80)
+TargetFrame.Position = UDim2.new(0.5, -125, 0, 20)
+TargetFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+TargetFrame.BackgroundTransparency = 0.4
+TargetFrame.BorderSizePixel = 0
+TargetFrame.Visible = true
+TargetFrame.Parent = ScreenGui
+
+local UICornerTarget = Instance.new("UICorner")
+UICornerTarget.CornerRadius = UDim.new(0, 8)
+UICornerTarget.Parent = TargetFrame
+
+local DraggingTarget = false
+local DragInputTarget, DragStartTarget, StartPositionTarget
+
+TargetFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        DraggingTarget = true
+        DragStartTarget = input.Position
+        StartPositionTarget = TargetFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                DraggingTarget = false
+            end
+        end)
+    end
+end)
+
+TargetFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        DragInputTarget = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == DragInputTarget and DraggingTarget then
+        local Delta = input.Position - DragStartTarget
+        TargetFrame.Position = UDim2.new(
+            StartPositionTarget.X.Scale, 
+            StartPositionTarget.X.Offset + Delta.X,
+            StartPositionTarget.Y.Scale, 
+            StartPositionTarget.Y.Offset + Delta.Y
+        )
+    end
+end)
+
+local TargetName = Instance.new("TextLabel")
+TargetName.Size = UDim2.new(1, -10, 0, 25)
+TargetName.Position = UDim2.new(0, 5, 0, 5)
+TargetName.Text = "Target: None"
+TargetName.BackgroundTransparency = 1
+TargetName.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetName.Font = Enum.Font.GothamBold
+TargetName.TextSize = 16
+TargetName.TextXAlignment = Enum.TextXAlignment.Left
+TargetName.Parent = TargetFrame
+
+local TargetHealth = Instance.new("TextLabel")
+TargetHealth.Size = UDim2.new(1, -10, 0, 20)
+TargetHealth.Position = UDim2.new(0, 5, 0, 30)
+TargetHealth.Text = "Health: 0/100"
+TargetHealth.BackgroundTransparency = 1
+TargetHealth.TextColor3 = Color3.fromRGB(255, 100, 100)
+TargetHealth.Font = Enum.Font.Gotham
+TargetHealth.TextSize = 14
+TargetHealth.TextXAlignment = Enum.TextXAlignment.Left
+TargetHealth.Parent = TargetFrame
+
+local TargetDistance = Instance.new("TextLabel")
+TargetDistance.Size = UDim2.new(1, -10, 0, 20)
+TargetDistance.Position = UDim2.new(0, 5, 0, 50)
+TargetDistance.Text = "Distance: 0 studs"
+TargetDistance.BackgroundTransparency = 1
+TargetDistance.TextColor3 = Color3.fromRGB(100, 200, 255)
+TargetDistance.Font = Enum.Font.Gotham
+TargetDistance.TextSize = 14
+TargetDistance.TextXAlignment = Enum.TextXAlignment.Left
+TargetDistance.Parent = TargetFrame
+
+local TARGET_GUI_VISIBLE = true
+ToggleTargetGuiBtn.MouseButton1Click:Connect(function()
+    TARGET_GUI_VISIBLE = not TARGET_GUI_VISIBLE
+    TargetFrame.Visible = TARGET_GUI_VISIBLE
+    ToggleTargetGuiBtn.Text = "Target GUI: " .. (TARGET_GUI_VISIBLE and "ON" or "OFF")
+    saveConfig()
+end)
+
+-- Toggle GUI chính
+ToggleGuiBtn.MouseButton1Click:Connect(function()
+    GUI_VISIBLE = not GUI_VISIBLE
+    MainFrame.Visible = GUI_VISIBLE
+    ToggleGuiBtn.Text = GUI_VISIBLE and "≡" or "≡"
+    saveConfig()
+end)
+
+-- Hàm kiểm tra tường
+local function isVisible(targetPart)
+    if not WALL_CHECK then
+        return true
+    end
+    
+    local localCharacter = localPlayer.Character
+    if not localCharacter then return false end
+    
+    local localRoot = localCharacter:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return false end
+    
+    local direction = (targetPart.Position - localRoot.Position)
+    local ray = Ray.new(localRoot.Position, direction.Unit * direction.Magnitude)
+    
+    local ignoreList = {localCharacter, targetPart.Parent}
+    local hit, position = workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+    
+    return hit == nil
+end
+
+-- Hàm lấy bộ phận aim
+local function getAimPart(character)
+    if not character then return nil end
+    
+    if AIM_PART == "Head" then
+        return character:FindFirstChild("Head")
+    elseif AIM_PART == "HumanoidRootPart" then
+        return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+    end
+    
+    return character:FindFirstChild("Head")
+end
+
+-- Hàm kiểm tra NPC
+local function isNPC(character)
+    if not character then return false end
+    
+    -- Kiểm tra nếu có Humanoid và không phải player
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    
+    -- Kiểm tra nếu không có Player instance
+    local player = Players:GetPlayerFromCharacter(character)
+    if player then return false end
+    
+    -- Kiểm tra các dấu hiệu NPC phổ biến
+    if character:FindFirstChild("NPC") or character:FindFirstChild("Npc") then
+        return true
+    end
+    
+    -- Kiểm tra tên có chứa từ khóa NPC
+    local name = character.Name:lower()
+    if name:find("npc") or name:find("bot") or name:find("enemy") or name:find("mob") then
+        return true
+    end
+    
+    return false
+end
+
+-- Hàm lấy mục tiêu gần nhất (bao gồm NPC)
+local function getClosestTarget()
+    local nearest, lastDist
+    lastDist = AIM_MAX_DISTANCE
+    local center = Cam.ViewportSize / 2
+    
+    -- Tìm player targets
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            if player.Character then
+                local aimPart = getAimPart(player.Character)
+                if aimPart then
+                    local screenPos, visible = Cam:WorldToViewportPoint(aimPart.Position)
+                    if visible then
+                        local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                        if dist < FOV_RADIUS then
+                            local studsDist = (aimPart.Position - Cam.CFrame.Position).Magnitude
+                            if studsDist <= AIM_MAX_DISTANCE then
+                                if isVisible(aimPart) then
+                                    local shouldAim = false
+                                    
+                                    if AIM_ENEMY_ONLY then
+                                        if player.Team ~= localPlayer.Team then
+                                            shouldAim = true
+                                        end
+                                    else
+                                        shouldAim = true
+                                    end
+                                    
+                                    if shouldAim and dist < lastDist then
+                                        nearest = player
+                                        lastDist = dist
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Tìm NPC targets nếu được bật
+    if AIM_NPC then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Model") and isNPC(obj) then
+                local aimPart = getAimPart(obj)
+                if aimPart then
+                    local screenPos, visible = Cam:WorldToViewportPoint(aimPart.Position)
+                    if visible then
+                        local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                        if dist < FOV_RADIUS then
+                            local studsDist = (aimPart.Position - Cam.CFrame.Position).Magnitude
+                            if studsDist <= AIM_MAX_DISTANCE then
+                                if isVisible(aimPart) then
+                                    if dist < lastDist then
+                                        nearest = obj
+                                        lastDist = dist
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return nearest
+end
+
+-- Hàm tạo chuyển động người thật
+local function humanLikeAim(target)
+    if not target then return end
+    
+    local aimPart = nil
+    local targetPos = nil
+    
+    -- Xác định vị trí mục tiêu dựa trên loại target
+    if typeof(target) == "Instance" and target:IsA("Player") then
+        -- Target là player
+        if not target.Character then return end
+        aimPart = getAimPart(target.Character)
+        if not aimPart then return end
+        targetPos = aimPart.Position
+    elseif typeof(target) == "Instance" and target:IsA("Model") then
+        -- Target là NPC/Model
+        aimPart = getAimPart(target)
+        if not aimPart then return end
+        targetPos = aimPart.Position
+    else
+        return
+    end
+    
+    local currentCFrame = Cam.CFrame
+    local currentTime = tick()
+    
+    -- Thời gian phản ứng
+    if not isAiming then
+        isAiming = true
+        aimStartTime = currentTime
+        return
+    end
+    
+    local aimDuration = currentTime - aimStartTime
+    local reactionFactor = math.min(aimDuration / HUMAN_REACTION_TIME, 1)
+    
+    -- Tính toán hướng nhìn mục tiêu
+    local targetLookVector = (targetPos - currentCFrame.Position).Unit
+    
+    -- Thêm độ rung tay
+    local shakeOffset = Vector3.new(
+        (math.random() - 0.5) * AIM_SHAKE * 0.01,
+        (math.random() - 0.5) * AIM_SHAKE * 0.01,
+        (math.random() - 0.5) * AIM_SHAKE * 0.01
+    )
+    
+    -- Hiệu ứng vượt quá mục tiêu (overshoot)
+    local overshootFactor = 0
+    if aimDuration < 0.2 then
+        overshootFactor = AIM_OVERSHOOT * (1 - aimDuration / 0.2)
+    end
+    
+    local overshootOffset = targetLookVector * overshootFactor * 0.5
+    
+    -- Kết hợp các hiệu ứng
+    local finalTargetVector = (targetLookVector + shakeOffset + overshootOffset).Unit
+    
+    -- Áp dụng smooth interpolation với tốc độ con người
+    local currentLookVector = currentCFrame.LookVector
+    local smoothFactor = HUMAN_SMOOTHNESS * reactionFactor
+    
+    -- Giảm độ mượt khi gần mục tiêu để tạo cảm giác "chỉnh sửa"
+    local angleToTarget = math.acos(math.clamp(currentLookVector:Dot(targetLookVector), -1, 1))
+    if angleToTarget < 0.1 then
+        smoothFactor = smoothFactor * 0.3
+    end
+    
+    local smoothedLookVector = currentLookVector:Lerp(finalTargetVector, smoothFactor)
+    
+    -- Tạo CFrame mới
+    Cam.CFrame = CFrame.lookAt(currentCFrame.Position, currentCFrame.Position + smoothedLookVector)
+end
+
+-- Hàm lấy thông tin target cho GUI
+local function getTargetInfo(target)
+    if not target then
+        return "None", "0/100", "0"
+    end
+    
+    local name = "Unknown"
+    local health = "0/100"
+    local distance = "0"
+    
+    if typeof(target) == "Instance" and target:IsA("Player") then
+        -- Target là player
+        name = target.Name
+        if target.Character then
+            local humanoid = target.Character:FindFirstChildOfClass("Humanoid")
+            local aimPart = getAimPart(target.Character)
+            if humanoid then
+                health = string.format("%d/%d", math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
+            end
+            if aimPart then
+                distance = tostring(math.floor((aimPart.Position - Cam.CFrame.Position).Magnitude))
+            end
+        end
+    elseif typeof(target) == "Instance" and target:IsA("Model") then
+        -- Target là NPC
+        name = target.Name .. " (NPC)"
+        local humanoid = target:FindFirstChildOfClass("Humanoid")
+        local aimPart = getAimPart(target)
+        if humanoid then
+            health = string.format("%d/%d", math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
+        end
+        if aimPart then
+            distance = tostring(math.floor((aimPart.Position - Cam.CFrame.Position).Magnitude))
+        end
+    end
+    
+    return name, health, distance
+end
+
+-- Load config khi script start
+loadConfig()
+
+-- Update UI sau khi load config
+FOVBox.Text = tostring(FOV_RADIUS)
+DistanceBox.Text = tostring(AIM_MAX_DISTANCE)
+SmoothnessBox.Text = tostring(HUMAN_SMOOTHNESS)
+ShakeBox.Text = tostring(AIM_SHAKE)
+OvershootBox.Text = tostring(AIM_OVERSHOOT)
+
+-- Update mode button
+if AIM_ENEMY_ONLY and not AIM_NPC then
+    CURRENT_MODE = 1
+    ModeBtn.Text = "Mode: Enemy"
+elseif not AIM_ENEMY_ONLY and not AIM_NPC then
+    CURRENT_MODE = 2
+    ModeBtn.Text = "Mode: All"
+elseif AIM_ENEMY_ONLY and AIM_NPC then
+    CURRENT_MODE = 3
+    ModeBtn.Text = "Mode: NPC"
+elseif not AIM_ENEMY_ONLY and AIM_NPC then
+    CURRENT_MODE = 4
+    ModeBtn.Text = "Mode: All + NPC"
+end
+
+WallCheckBtn.Text = "Wall Check: " .. (WALL_CHECK and "ON" or "OFF")
+LockBtn.Text = "Lock: " .. (AIM_LOCKED and "ON" or "OFF")
+AimPartBtn.Text = "Aim: " .. (AIM_PART == "Head" and "Head" or "Body")
+MainFrame.Visible = GUI_VISIBLE
+
+-- Main loop
+RunService.RenderStepped:Connect(function()
+    updateFOV()
+    
+    if AIM_ENABLED then
+        local target = nil
+        
+        if AIM_LOCKED and LOCKED_TARGET then
+            target = LOCKED_TARGET
+        else
+            target = getClosestTarget()
+            if target and AIM_LOCKED then
+                LOCKED_TARGET = target
+            end
+        end
+        
+        -- Reset trạng thái aim khi thay đổi mục tiêu
+        if target ~= currentTarget then
+            currentTarget = target
+            isAiming = false
+            lastTargetChange = tick()
+        end
+        
+        -- Thực hiện aim
+        if target then
+            humanLikeAim(target)
+        else
+            isAiming = false
+        end
+        
+        -- Cập nhật Target GUI
+        local name, health, distance = getTargetInfo(target)
+        TargetName.Text = "Target: " .. name
+        TargetHealth.Text = "Health: " .. health
+        TargetDistance.Text = "Distance: " .. distance .. " studs"
+    else
+        TargetName.Text = "Target: None"
+        TargetHealth.Text = "Health: 0/100"
+        TargetDistance.Text = "Distance: 0 studs"
+        currentTarget = nil
+        isAiming = false
+    end
+end)
+
+print("🎯 Aimbot by phuoc loaded! Config auto-save enabled.")
